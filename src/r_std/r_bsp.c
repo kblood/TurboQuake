@@ -82,61 +82,83 @@ void R_RotateBmodel (void)
 
 // TODO: should use a look-up table
 // TODO: should really be stored with the entity instead of being reconstructed
-// TODO: could cache lazily, stored in the entity
 // TODO: share work with R_SetUpAliasTransform
 
-// yaw
-	angle = currententity->angles[YAW];		
-	angle = angle * M_PI*2 / 360;
-	s = sin(angle);
-	c = cos(angle);
+// Most brush entities (doors, platforms, buttons, etc.) sit at rest with
+// unchanging angles for many consecutive frames. entity_rotation is a pure,
+// deterministic function of currententity->angles, so if those angles are
+// unchanged since the last time we built this entity's matrix, we can just
+// memcpy the previously computed result instead of re-running 3x sin() +
+// 3x cos() + 2 R_ConcatRotations. Because the cached matrix was itself
+// produced by this exact same math from these exact same angle values, the
+// result is bit-identical to recomputing it -- this is only a cache of a
+// repeatable calculation, not an approximation.
+	if (currententity->bmodel_rotation_cached &&
+		VectorCompare (currententity->angles, currententity->bmodel_rotation_angles))
+	{
+		memcpy (entity_rotation, currententity->bmodel_rotation_matrix,
+				sizeof(entity_rotation));
+	}
+	else
+	{
+	// yaw
+		angle = currententity->angles[YAW];
+		angle = angle * M_PI*2 / 360;
+		s = sin(angle);
+		c = cos(angle);
 
-	temp1[0][0] = c;
-	temp1[0][1] = s;
-	temp1[0][2] = 0;
-	temp1[1][0] = -s;
-	temp1[1][1] = c;
-	temp1[1][2] = 0;
-	temp1[2][0] = 0;
-	temp1[2][1] = 0;
-	temp1[2][2] = 1;
+		temp1[0][0] = c;
+		temp1[0][1] = s;
+		temp1[0][2] = 0;
+		temp1[1][0] = -s;
+		temp1[1][1] = c;
+		temp1[1][2] = 0;
+		temp1[2][0] = 0;
+		temp1[2][1] = 0;
+		temp1[2][2] = 1;
 
 
-// pitch
-	angle = currententity->angles[PITCH];		
-	angle = angle * M_PI*2 / 360;
-	s = sin(angle);
-	c = cos(angle);
+	// pitch
+		angle = currententity->angles[PITCH];
+		angle = angle * M_PI*2 / 360;
+		s = sin(angle);
+		c = cos(angle);
 
-	temp2[0][0] = c;
-	temp2[0][1] = 0;
-	temp2[0][2] = -s;
-	temp2[1][0] = 0;
-	temp2[1][1] = 1;
-	temp2[1][2] = 0;
-	temp2[2][0] = s;
-	temp2[2][1] = 0;
-	temp2[2][2] = c;
+		temp2[0][0] = c;
+		temp2[0][1] = 0;
+		temp2[0][2] = -s;
+		temp2[1][0] = 0;
+		temp2[1][1] = 1;
+		temp2[1][2] = 0;
+		temp2[2][0] = s;
+		temp2[2][1] = 0;
+		temp2[2][2] = c;
 
-	R_ConcatRotations (temp2, temp1, temp3);
+		R_ConcatRotations (temp2, temp1, temp3);
 
-// roll
-	angle = currententity->angles[ROLL];		
-	angle = angle * M_PI*2 / 360;
-	s = sin(angle);
-	c = cos(angle);
+	// roll
+		angle = currententity->angles[ROLL];
+		angle = angle * M_PI*2 / 360;
+		s = sin(angle);
+		c = cos(angle);
 
-	temp1[0][0] = 1;
-	temp1[0][1] = 0;
-	temp1[0][2] = 0;
-	temp1[1][0] = 0;
-	temp1[1][1] = c;
-	temp1[1][2] = s;
-	temp1[2][0] = 0;
-	temp1[2][1] = -s;
-	temp1[2][2] = c;
+		temp1[0][0] = 1;
+		temp1[0][1] = 0;
+		temp1[0][2] = 0;
+		temp1[1][0] = 0;
+		temp1[1][1] = c;
+		temp1[1][2] = s;
+		temp1[2][0] = 0;
+		temp1[2][1] = -s;
+		temp1[2][2] = c;
 
-	R_ConcatRotations (temp1, temp3, entity_rotation);
+		R_ConcatRotations (temp1, temp3, entity_rotation);
+
+		VectorCopy (currententity->angles, currententity->bmodel_rotation_angles);
+		memcpy (currententity->bmodel_rotation_matrix, entity_rotation,
+				sizeof(entity_rotation));
+		currententity->bmodel_rotation_cached = true;
+	}
 
 //
 // rotate modelorg and the transformation matrix
