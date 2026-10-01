@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define NUM_MIPS	4
 
 cvar_t	d_subdiv16 = {"d_subdiv16", "1"};
+#ifdef USE_D_DRAWCH
+cvar_t	d_chorz = {"d_chorz", "0"};
+#endif
 cvar_t	d_mipcap = {"d_mipcap", "0"};
 cvar_t	d_mipscale = {"d_mipscale", "1"};
 
@@ -50,6 +53,9 @@ void D_Init (void)
 	r_skydirect = 1;
 
 	Cvar_RegisterVariable (&d_subdiv16);
+#ifdef USE_D_DRAWCH
+	Cvar_RegisterVariable (&d_chorz);
+#endif
 	Cvar_RegisterVariable (&d_mipcap);
 	Cvar_RegisterVariable (&d_mipscale);
 

@@ -198,6 +198,94 @@ void R_TimeGraph (void)
 
 /*
 =============
+R_ResetStageProfile
+=============
+*/
+void R_ResetStageProfile (void)
+{
+	prof_edgebsp_accum = 0;
+	prof_world_accum = 0;
+	prof_bmodel_accum = 0;
+	prof_scanedges_accum = 0;
+	prof_surfcache_accum = 0;
+	prof_spandraw_accum = 0;
+	prof_alias_accum = 0;
+	prof_particles_accum = 0;
+	prof_frame_accum = 0;
+	prof_frame_count = 0;
+
+#ifdef USE_D_DRAWCH
+	prof_chorz_accum = 0;
+	prof_chorz_surfaces = 0;
+#endif
+}
+
+
+/*
+=============
+R_PrintStageProfile
+
+Dumps the wall-clock renderer stage accumulators after a timedemo. The timings
+come from the existing PIT-backed Sys_FloatTime() path and are intended for
+coarse renderer direction finding, not instruction-level cycle accounting.
+=============
+*/
+void R_PrintStageProfile (void)
+{
+	double	span_gen;
+	double	accounted;
+	double	other;
+	double	total;
+
+	total = prof_frame_accum;
+	if (total <= 0)
+	{
+		Con_Printf ("R_PrintStageProfile: no frames profiled\n");
+		return;
+	}
+
+	span_gen = prof_scanedges_accum - prof_surfcache_accum - prof_spandraw_accum;
+	if (span_gen < 0)
+		span_gen = 0;
+
+	accounted = prof_world_accum + prof_bmodel_accum + span_gen +
+				prof_surfcache_accum + prof_spandraw_accum +
+				prof_alias_accum + prof_particles_accum;
+	other = total - accounted;
+	if (other < 0)
+		other = 0;
+
+	Con_Printf ("--- stage profile (%d frames, %.3f s total render time) ---\n",
+				prof_frame_count, total);
+	Con_Printf ("  world BSP traversal  %7.3f s  %5.1f%%\n",
+				prof_world_accum, 100.0 * prof_world_accum / total);
+	Con_Printf ("  brush entity setup   %7.3f s  %5.1f%%\n",
+				prof_bmodel_accum, 100.0 * prof_bmodel_accum / total);
+	Con_Printf ("  edge/BSP subtotal    %7.3f s  %5.1f%%\n",
+				prof_edgebsp_accum, 100.0 * prof_edgebsp_accum / total);
+	Con_Printf ("  span gen (scan conv) %7.3f s  %5.1f%%\n",
+				span_gen, 100.0 * span_gen / total);
+	Con_Printf ("  surface caching      %7.3f s  %5.1f%%\n",
+				prof_surfcache_accum, 100.0 * prof_surfcache_accum / total);
+	Con_Printf ("  span drawing (fill)  %7.3f s  %5.1f%%\n",
+				prof_spandraw_accum, 100.0 * prof_spandraw_accum / total);
+#ifdef USE_D_DRAWCH
+	Con_Printf ("    CHorz subset       %7.3f s  %5.1f%%  (%d surfaces)\n",
+				prof_chorz_accum, 100.0 * prof_chorz_accum / total,
+				prof_chorz_surfaces);
+#endif
+	Con_Printf ("  alias model draw     %7.3f s  %5.1f%%\n",
+				prof_alias_accum, 100.0 * prof_alias_accum / total);
+	Con_Printf ("  particles            %7.3f s  %5.1f%%\n",
+				prof_particles_accum, 100.0 * prof_particles_accum / total);
+	Con_Printf ("  everything else      %7.3f s  %5.1f%%\n",
+				other, 100.0 * other / total);
+	Con_Printf ("  (frame total)        %7.3f s\n", total);
+}
+
+
+/*
+=============
 R_PrintTimes
 =============
 */

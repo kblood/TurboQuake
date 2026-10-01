@@ -55,6 +55,9 @@ typedef struct sspan_s
 } sspan_t;
 
 extern cvar_t	d_subdiv16;
+#ifdef USE_D_DRAWCH
+extern cvar_t	d_chorz;
+#endif
 
 extern float	scale_for_mip;
 

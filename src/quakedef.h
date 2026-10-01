@@ -320,6 +320,29 @@ extern qboolean		isDedicated;
 extern int			minimum_memory;
 
 //
+// Coarse wall-clock stage profiling. These are accumulated across rendered
+// frames and dumped by R_PrintStageProfile() at timedemo completion.
+//
+extern double	prof_edgebsp_accum;
+extern double	prof_world_accum;
+extern double	prof_bmodel_accum;
+extern double	prof_scanedges_accum;
+extern double	prof_surfcache_accum;
+extern double	prof_spandraw_accum;
+extern double	prof_alias_accum;
+extern double	prof_particles_accum;
+extern double	prof_frame_accum;
+extern int		prof_frame_count;
+
+#ifdef USE_D_DRAWCH
+extern double	prof_chorz_accum;
+extern int		prof_chorz_surfaces;
+#endif
+
+void R_ResetStageProfile (void);
+void R_PrintStageProfile (void);
+
+//
 // chase
 //
 extern	cvar_t	chase_active;

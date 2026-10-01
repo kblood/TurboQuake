@@ -112,6 +112,22 @@ float	dp_time1, dp_time2, db_time1, db_time2, rw_time1, rw_time2;
 float	se_time1, se_time2, de_time1, de_time2, dv_time1, dv_time2;
 float	ds_time1, ds_time2, ed_time1, ed_time2;
 
+double	prof_edgebsp_accum;
+double	prof_world_accum;
+double	prof_bmodel_accum;
+double	prof_scanedges_accum;
+double	prof_surfcache_accum;
+double	prof_spandraw_accum;
+double	prof_alias_accum;
+double	prof_particles_accum;
+double	prof_frame_accum;
+int		prof_frame_count;
+
+#ifdef USE_D_DRAWCH
+double	prof_chorz_accum;
+int		prof_chorz_surfaces;
+#endif
+
 void R_MarkLeaves (void);
 
 cvar_t	r_draworder = {"r_draworder","0"};
@@ -907,7 +923,13 @@ void R_EdgeDrawing (void)
 		rw_time1 = Sys_FloatTime ();
 	}
 
-	R_RenderWorld ();
+	{
+		double	prof_t0;
+
+		prof_t0 = Sys_FloatTime ();
+		R_RenderWorld ();
+		prof_world_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_drawculledpolys)
 		R_ScanEdges ();
@@ -922,7 +944,15 @@ void R_EdgeDrawing (void)
 		db_time1 = rw_time2;
 	}
 
-	R_DrawBEntitiesOnList ();
+	{
+		double	prof_t0;
+
+		prof_t0 = Sys_FloatTime ();
+		R_DrawBEntitiesOnList ();
+		prof_bmodel_accum += Sys_FloatTime () - prof_t0;
+	}
+
+	prof_edgebsp_accum = prof_world_accum + prof_bmodel_accum;
 
 	if (r_dspeeds.value)
 	{
@@ -940,7 +970,13 @@ void R_EdgeDrawing (void)
 	}
 	
 	if (!(r_drawpolys | r_drawculledpolys))
+	{
+		double	prof_t0;
+
+		prof_t0 = Sys_FloatTime ();
 		R_ScanEdges ();
+		prof_scanedges_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 		ed_time2 = Sys_FloatTime();
@@ -957,6 +993,9 @@ r_refdef must be set before the first call
 void R_RenderView_ (void)
 {
 	byte	warpbuffer[WARP_WIDTH * WARP_HEIGHT];
+	double	prof_frame_t0;
+
+	prof_frame_t0 = Sys_FloatTime ();
 
 	r_warpbuffer = warpbuffer;
 
@@ -1006,15 +1045,21 @@ void R_RenderView_ (void)
 		de_time1 = se_time2;
 	}
 
-	R_DrawEntitiesOnList ();
-
-	if (r_dspeeds.value)
 	{
-		de_time2 = Sys_FloatTime ();
-		dv_time1 = de_time2;
-	}
+		double	prof_t0;
 
-	R_DrawViewModel ();
+		prof_t0 = Sys_FloatTime ();
+		R_DrawEntitiesOnList ();
+
+		if (r_dspeeds.value)
+		{
+			de_time2 = Sys_FloatTime ();
+			dv_time1 = de_time2;
+		}
+
+		R_DrawViewModel ();
+		prof_alias_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 	{
@@ -1022,7 +1067,13 @@ void R_RenderView_ (void)
 		dp_time1 = Sys_FloatTime ();
 	}
 
-	R_DrawParticles ();
+	{
+		double	prof_t0;
+
+		prof_t0 = Sys_FloatTime ();
+		R_DrawParticles ();
+		prof_particles_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 		dp_time2 = Sys_FloatTime ();
@@ -1049,6 +1100,9 @@ void R_RenderView_ (void)
 
 	if (r_reportedgeout.value && r_outofedges)
 		Con_Printf ("Short roughly %d edges\n", r_outofedges * 2 / 3);
+
+	prof_frame_accum += Sys_FloatTime () - prof_frame_t0;
+	prof_frame_count++;
 
 // back to high floating-point precision
 	Sys_HighFPPrecision ();
