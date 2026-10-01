@@ -147,13 +147,14 @@ LSpanLoop:
 	fadds	C(d_ziorigin)		// 1/z | t/z | s/z                                      :: 8-20
                                 //                                                      :: TOTAL 158-236
 
-	flds	fp_64k				// fp_64k | 1/z | t/z | s/z
+	fsts	zi_tmp				// fp_64k | 1/z | t/z | s/z
 							
 //
 // calculate and clamp s & t
 //
 	// divide 1/z by fp64k and store where fp64k was
-	fdiv	%st(1),%st(0)	//  z*64k | 1/z | t/z | s/z
+	call	RecipZ64k
+	flds	z64k_tmp	//  z*64k | 1/z | t/z | s/z
 
 //
 // point %edi to the first pixel in the span
@@ -199,8 +200,9 @@ LSpanLoop:
 	faddp	%st(0),%st(3)		// 1/z adj | t/z adj | s/z adj							:: 8-20
 								//														:: TOTAL 79-118
 						
-	flds	fp_64k				// 64k | 1/z adj | t/z adj | s/z adj
-	fdiv	%st(1),%st(0)	// this is what we've gone to all this trouble to
+	fsts	zi_tmp				// 64k | 1/z adj | t/z adj | s/z adj
+	call	RecipZ64k
+	flds	z64k_tmp	// this is what we've gone to all this trouble to
 							//  overlap
 	jmp		LFDIVInFlight1
 
@@ -227,8 +229,9 @@ LSetupNotLast1:
 	faddp	%st(0),%st(3)	// 1/z adj | t/z | s/z adj
 	flds	tdivz8stepu		// tdivz | 1/z adj | t/z | s/z adj
 	faddp	%st(0),%st(2)	// 1/z adj | t/z adj | s/z adj
-	flds	fp_64k
-	fdiv	%st(1),%st(0)	// z = 1/1/z
+	fsts	zi_tmp
+	call	RecipZ64k
+	flds	z64k_tmp	// z = 1/1/z
 							// this is what we've gone to all this trouble to
 							//  overlap
 LFDIVInFlight1:
@@ -412,8 +415,9 @@ LSetUp1:
 	faddp	%st(0),%st(3)		// 1/z adj | t/z adj | s/z adj							:: 8-20
 								//														:: TOTAL 79-118
 
-	flds	fp_64k
-	fdiv	%st(1),%st(0)	// this is what we've gone to all this trouble to
+	fsts	zi_tmp
+	call	RecipZ64k
+	flds	z64k_tmp	// this is what we've gone to all this trouble to
 							//  overlap
 	jmp		LFDIVInFlight2
 
@@ -424,8 +428,9 @@ LSetupNotLast2:
 	faddp	%st(0),%st(3)	// 1/z adj | t/z | s/z adj
 	flds	tdivz8stepu		// tdivz | 1/z adj | t/z | s/z adj
 	faddp	%st(0),%st(2)	// 1/z adj | t/z adj | s/z adj
-	flds	fp_64k
-	fdiv	%st(1),%st(0)	// z = 1/1/z
+	fsts	zi_tmp
+	call	RecipZ64k
+	flds	z64k_tmp	// z = 1/1/z
 							// this is what we've gone to all this trouble to
 							//  overlap
 LFDIVInFlight2:

@@ -1437,7 +1437,27 @@ LNDLoop:
 	movl	%eax,C(r_p0)+16
 	movl	%esi,C(r_p0)+20
 
-	fdivrs	float_1
+// FDIV->reciprocal-LUT optimization (docs/fdiv-opt-prototype.md follow-up):
+// the FPU stack here holds nothing but the float conversion of d_xdenom
+// (pushed by the fildl above), and d_xdenom is ALWAYS STRICTLY NEGATIVE
+// at this point -- the "jns LNextTri" skip earlier in this loop already
+// discarded the >=0 (backfacing/zero-area) case, so |d_xdenom| >= 1
+// always. Its magnitude is a cross product of two screen-space coordinate
+// deltas (bounded by MAXHEIGHT=1024's screen-size limits), so it ranges
+// roughly 1..~10^7 -- a very different domain from the vertex 1/z case
+// in r_aliasa.s, but Recip's mantissa-LUT+Newton technique (src/r_std/
+// d_varsa.s) is domain-independent (same ~2.4e-7 max relative error
+// regardless of exponent/magnitude -- see d_varsa.s), and it explicitly
+// preserves the sign bit, so it covers this always-negative domain
+// exactly like it covers z's always-positive one. Pure integer, no FPU
+// state touched: snapshot (fsts), call, pop the old value, push the new
+// reciprocal, leaving the FPU stack exactly as the old fdivrs did (one
+// value: xstepdenominv, later consumed by the `fstps C(d_xdenom)` below
+// and read back by D_PolysetCalcGradients).
+	fsts	recip_in
+	call	Recip
+	fstp	%st(0)
+	flds	recip_out
 
 //		r_p1[0] = index1->v[0];
 //		r_p1[1] = index1->v[1];
