@@ -90,7 +90,8 @@ qboolean R_AliasCheckBBox (void)
 {
 	int					i, flags, frame, numv;
 	aliashdr_t			*pahdr;
-	float				zi, basepts[8][3], v0, v1, frac;
+	float				basepts[8][3], frac;
+	float				left_edge, right_edge, top_edge, bottom_edge;
 	finalvert_t			*pv0, *pv1, viewpts[16];
 	auxvert_t			*pa0, *pa1, viewaux[16];
 	maliasframedesc_t	*pframedesc;
@@ -200,28 +201,48 @@ qboolean R_AliasCheckBBox (void)
 	anyclip = 0;
 	allclip = ALIAS_XY_CLIP_MASK;
 
+// Divide-free clip test: instead of computing zi = 1/z and comparing
+// v0 = x*xscale*zi + xcenter against the screen edges (one FDIV per
+// vertex), cross-multiply by z. Every vertex reaching this loop has
+// z >= ALIAS_Z_CLIP_PLANE > 0 (guaranteed by the z-clip pass above, which
+// skips ALIAS_Z_CLIP-flagged points), so z is strictly positive and the
+// comparison direction is preserved when multiplying both sides by it:
+//   x*xscale*zi + xcenter <cmp> edge
+//     <=>  x*xscale*zi <cmp> (edge - xcenter)
+//     <=>  x*xscale <cmp> (edge - xcenter) * z          [z > 0]
+// The four (edge - center) terms are per-frame constants, hoisted out of
+// the loop, so this trades 1 FDIV/vertex for a couple of extra FMULs —
+// a straight win on FPUs (like the target core) where FDIV latency can't
+// be hidden behind unrelated integer work. Produces identical flags to
+// the original divide-based test (same sign/ordering, no precision loss
+// beyond ordinary float rounding).
+	left_edge = r_refdef.fvrectx - xcenter;
+	right_edge = r_refdef.fvrectright - xcenter;
+	top_edge = r_refdef.fvrecty - ycenter;
+	bottom_edge = r_refdef.fvrectbottom - ycenter;
+
 // TODO: probably should do this loop in ASM, especially if we use floats
 	for (i=0 ; i<numv ; i++)
 	{
+		float	x, y, z;
+
 	// we don't need to bother with vertices that were z-clipped
 		if (viewpts[i].flags & ALIAS_Z_CLIP)
 			continue;
 
-		zi = 1.0 / viewaux[i].fv[2];
-
-	// FIXME: do with chop mode in ASM, or convert to float
-		v0 = (viewaux[i].fv[0] * xscale * zi) + xcenter;
-		v1 = (viewaux[i].fv[1] * yscale * zi) + ycenter;
+		x = viewaux[i].fv[0] * xscale;
+		y = viewaux[i].fv[1] * yscale;
+		z = viewaux[i].fv[2];
 
 		flags = 0;
 
-		if (v0 < r_refdef.fvrectx)
+		if (x < left_edge * z)
 			flags |= ALIAS_LEFT_CLIP;
-		if (v1 < r_refdef.fvrecty)
+		if (y < top_edge * z)
 			flags |= ALIAS_TOP_CLIP;
-		if (v0 > r_refdef.fvrectright)
+		if (x > right_edge * z)
 			flags |= ALIAS_RIGHT_CLIP;
-		if (v1 > r_refdef.fvrectbottom)
+		if (y > bottom_edge * z)
 			flags |= ALIAS_BOTTOM_CLIP;
 
 		anyclip |= flags;
