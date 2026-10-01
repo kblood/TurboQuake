@@ -36,9 +36,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <conio.h>
 
 #include "../quakedef.h"
-#include "../dosisms.h"
+#include "../dos/dosisms.h"
 
-#include "../r_shared.h"
+#include "../r_std/r_shared.h"
 
 #include "qmark.h"
 

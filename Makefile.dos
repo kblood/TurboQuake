@@ -166,6 +166,59 @@ all: $(BUILDDIR)/$(BINNAME).exe build_release $(TARGETS)
     
 include src/r_${RENDERER}/renderer.mk
 
+# --- r8 Makefile.dos fix: the shipped objs.mk is the n64-style list (every object
+# under r_$(RENDERER)/) and does NOT match this renderer.mk's mixed flat/subdir rule
+# paths, and Makefile.dos never included it anyway -> empty COBJS -> link failure.
+# Define the renderer object lists inline to match renderer.mk's actual targets. ---
+486QUAKE_COBJS = \
+	$(BUILDDIR)/486quake/r_$(RENDERER)/draw.o \
+	$(BUILDDIR)/486quake/r_$(RENDERER)/d_edge.o \
+	$(BUILDDIR)/486quake/r_$(RENDERER)/d_fill.o \
+	$(BUILDDIR)/486quake/r_$(RENDERER)/d_init.o \
+	$(BUILDDIR)/486quake/r_$(RENDERER)/d_modech.o \
+	$(BUILDDIR)/486quake/d_part.o \
+	$(BUILDDIR)/486quake/d_polyse.o \
+	$(BUILDDIR)/486quake/d_scan.o \
+	$(BUILDDIR)/486quake/d_sky.o \
+	$(BUILDDIR)/486quake/d_sprite.o \
+	$(BUILDDIR)/486quake/d_surf.o \
+	$(BUILDDIR)/486quake/d_zpoint.o \
+	$(BUILDDIR)/486quake/r_$(RENDERER)/r_aclip.o \
+	$(BUILDDIR)/486quake/r_alias.o \
+	$(BUILDDIR)/486quake/r_bsp.o \
+	$(BUILDDIR)/486quake/r_light.o \
+	$(BUILDDIR)/486quake/r_draw.o \
+	$(BUILDDIR)/486quake/r_efrag.o \
+	$(BUILDDIR)/486quake/r_edge.o \
+	$(BUILDDIR)/486quake/r_misc.o \
+	$(BUILDDIR)/486quake/r_main.o \
+	$(BUILDDIR)/486quake/r_sky.o \
+	$(BUILDDIR)/486quake/r_sprite.o \
+	$(BUILDDIR)/486quake/r_surf.o \
+	$(BUILDDIR)/486quake/r_part.o \
+	$(BUILDDIR)/486quake/r_vars.o
+
+ifneq "$(OASM)" "yes"
+486QUAKE_COBJS += $(BUILDDIR)/486quake/d_vars.o
+else
+486QUAKE_OBJS += \
+	$(BUILDDIR)/486quake/d_copy.o \
+	$(BUILDDIR)/486quake/d_draw.o \
+	$(BUILDDIR)/486quake/d_draw16.o \
+	$(BUILDDIR)/486quake/d_parta.o \
+	$(BUILDDIR)/486quake/d_polysa.o \
+	$(BUILDDIR)/486quake/d_scana.o \
+	$(BUILDDIR)/486quake/d_spr8.o \
+	$(BUILDDIR)/486quake/d_varsa.o \
+	$(BUILDDIR)/486quake/r_aliasa.o \
+	$(BUILDDIR)/486quake/r_drawa.o \
+	$(BUILDDIR)/486quake/r_edgea.o \
+	$(BUILDDIR)/486quake/r_varsa.o \
+	$(BUILDDIR)/486quake/surf16.o \
+	$(BUILDDIR)/486quake/surf8.o \
+	$(BUILDDIR)/486quake/r_aclipa.o
+endif
+
 $(BUILDDIR)/$(BINNAME) : $(486QUAKE_OBJS) $(486QUAKE_COBJS)
 	$(CC) $(RELEASE_CFLAGS) -o $@ -Wl,--start-group $(486QUAKE_COBJS) $(486QUAKE_OBJS) $(LDFLAGS) -Wl,--end-group
 
