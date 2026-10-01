@@ -320,6 +320,23 @@ extern qboolean		isDedicated;
 extern int			minimum_memory;
 
 //
+// coarse wall-clock stage profiling (PIT-based Sys_FloatTime, see dos/sys_dos.c)
+// accumulated across every frame of a run; dumped once by R_PrintStageProfile()
+// (hooked from CL_FinishTimeDemo in cl_demo.c) so a -condebug timedemo capture
+// shows where the frame time actually goes.
+//
+extern double	prof_edgebsp_accum;	// R_RenderWorld + R_DrawBEntitiesOnList (BSP walk / edge setup)
+extern double	prof_scanedges_accum;	// R_ScanEdges() total (span generation, incl. surfcache+spandraw below)
+extern double	prof_surfcache_accum;	// D_CacheSurface() calls (surface caching/generation)
+extern double	prof_spandraw_accum;	// (*d_drawspans)() calls (textured span fill)
+extern double	prof_alias_accum;		// R_DrawEntitiesOnList + R_DrawViewModel (alias model transform/light/raster)
+extern double	prof_particles_accum;	// R_DrawParticles
+extern double	prof_frame_accum;		// total R_RenderView_ time, all frames summed
+extern int		prof_frame_count;
+
+void R_PrintStageProfile (void);
+
+//
 // chase
 //
 extern	cvar_t	chase_active;

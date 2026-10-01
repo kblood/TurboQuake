@@ -312,7 +312,11 @@ void D_DrawSurfaces (void)
 				* pface->texinfo->mipadjust);
 
 			// FIXME: make this passed in to D_CacheSurface
-				pcurrentcache = D_CacheSurface (pface, miplevel);
+				{
+					double	prof_t0 = Sys_FloatTime ();
+					pcurrentcache = D_CacheSurface (pface, miplevel);
+					prof_surfcache_accum += Sys_FloatTime () - prof_t0;
+				}
 
 				cacheblock = (pixel_t *)pcurrentcache->data;
 				cachewidth = pcurrentcache->width;
@@ -326,19 +330,25 @@ void D_DrawSurfaces (void)
 					D_DrawSolidSurface (s, (int)s->data & 0xFF);
 #endif
 
-				if ( (*(unsigned int*)(&d_zistepu) & 0x7fffffff) == 0 ) { //ugly... but fast
-					//D_DrawSolidSurface (s, 251);
-					//if (r_perfdebug.value == 0)
-						(*d_drawspans) (s->spans);
-					//else
-						//D_DrawSpansCHorz(s->spans);
-				} else {
-					//if ( ( s->flags & SURF_CZVERT ) && cl.viewangles[PITCH] == 0.0f ) {
-					//	D_DrawSolidSurface (s, 243);
-						//D_DrawSpansZIndexed(s->spans);
-					//} else {
-						(*d_drawspans) (s->spans);
-					//}
+				{
+					double	prof_t0 = Sys_FloatTime ();
+
+					if ( (*(unsigned int*)(&d_zistepu) & 0x7fffffff) == 0 ) { //ugly... but fast
+						//D_DrawSolidSurface (s, 251);
+						//if (r_perfdebug.value == 0)
+							(*d_drawspans) (s->spans);
+						//else
+							//D_DrawSpansCHorz(s->spans);
+					} else {
+						//if ( ( s->flags & SURF_CZVERT ) && cl.viewangles[PITCH] == 0.0f ) {
+						//	D_DrawSolidSurface (s, 243);
+							//D_DrawSpansZIndexed(s->spans);
+						//} else {
+							(*d_drawspans) (s->spans);
+						//}
+					}
+
+					prof_spandraw_accum += Sys_FloatTime () - prof_t0;
 				}
 
 				if (s->insubmodel)

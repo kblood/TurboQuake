@@ -112,6 +112,18 @@ float	dp_time1, dp_time2, db_time1, db_time2, rw_time1, rw_time2;
 float	se_time1, se_time2, de_time1, de_time2, dv_time1, dv_time2;
 float	ds_time1, ds_time2, ed_time1, ed_time2;
 
+// coarse wall-clock stage profiling accumulators (see quakedef.h); always-on,
+// hooked at per-frame/per-surface call boundaries only (never inside the
+// per-pixel/per-scanline inner loops) so Sys_FloatTime() overhead stays negligible.
+double	prof_edgebsp_accum;
+double	prof_scanedges_accum;
+double	prof_surfcache_accum;
+double	prof_spandraw_accum;
+double	prof_alias_accum;
+double	prof_particles_accum;
+double	prof_frame_accum;
+int		prof_frame_count;
+
 void R_MarkLeaves (void);
 
 cvar_t	r_draworder = {"r_draworder","0"};
@@ -907,22 +919,28 @@ void R_EdgeDrawing (void)
 		rw_time1 = Sys_FloatTime ();
 	}
 
-	R_RenderWorld ();
-
-	if (r_drawculledpolys)
-		R_ScanEdges ();
-
-// only the world can be drawn back to front with no z reads or compares, just
-// z writes, so have the driver turn z compares on now
-	D_TurnZOn ();
-
-	if (r_dspeeds.value)
 	{
-		rw_time2 = Sys_FloatTime ();
-		db_time1 = rw_time2;
-	}
+		double	prof_t0 = Sys_FloatTime ();
 
-	R_DrawBEntitiesOnList ();
+		R_RenderWorld ();
+
+		if (r_drawculledpolys)
+			R_ScanEdges ();
+
+	// only the world can be drawn back to front with no z reads or compares,
+	// just z writes, so have the driver turn z compares on now
+		D_TurnZOn ();
+
+		if (r_dspeeds.value)
+		{
+			rw_time2 = Sys_FloatTime ();
+			db_time1 = rw_time2;
+		}
+
+		R_DrawBEntitiesOnList ();
+
+		prof_edgebsp_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 	{
@@ -940,7 +958,11 @@ void R_EdgeDrawing (void)
 	}
 	
 	if (!(r_drawpolys | r_drawculledpolys))
+	{
+		double	prof_t0 = Sys_FloatTime ();
 		R_ScanEdges ();
+		prof_scanedges_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 		ed_time2 = Sys_FloatTime();
@@ -957,6 +979,9 @@ r_refdef must be set before the first call
 void R_RenderView_ (void)
 {
 	byte	warpbuffer[WARP_WIDTH * WARP_HEIGHT];
+	double	prof_frame_t0;
+
+	prof_frame_t0 = Sys_FloatTime ();
 
 	r_warpbuffer = warpbuffer;
 
@@ -1006,15 +1031,21 @@ void R_RenderView_ (void)
 		de_time1 = se_time2;
 	}
 
-	R_DrawEntitiesOnList ();
-
-	if (r_dspeeds.value)
 	{
-		de_time2 = Sys_FloatTime ();
-		dv_time1 = de_time2;
-	}
+		double	prof_t0 = Sys_FloatTime ();
 
-	R_DrawViewModel ();
+		R_DrawEntitiesOnList ();
+
+		if (r_dspeeds.value)
+		{
+			de_time2 = Sys_FloatTime ();
+			dv_time1 = de_time2;
+		}
+
+		R_DrawViewModel ();
+
+		prof_alias_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 	{
@@ -1022,7 +1053,11 @@ void R_RenderView_ (void)
 		dp_time1 = Sys_FloatTime ();
 	}
 
-	R_DrawParticles ();
+	{
+		double	prof_t0 = Sys_FloatTime ();
+		R_DrawParticles ();
+		prof_particles_accum += Sys_FloatTime () - prof_t0;
+	}
 
 	if (r_dspeeds.value)
 		dp_time2 = Sys_FloatTime ();
@@ -1049,6 +1084,9 @@ void R_RenderView_ (void)
 
 	if (r_reportedgeout.value && r_outofedges)
 		Con_Printf ("Short roughly %d edges\n", r_outofedges * 2 / 3);
+
+	prof_frame_accum += Sys_FloatTime () - prof_frame_t0;
+	prof_frame_count++;
 
 // back to high floating-point precision
 	Sys_HighFPPrecision ();

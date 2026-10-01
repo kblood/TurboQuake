@@ -198,6 +198,63 @@ void R_TimeGraph (void)
 
 /*
 =============
+R_PrintStageProfile
+
+Dumps the coarse wall-clock stage-profiling accumulators (see quakedef.h /
+r_main.c / d_edge.c) built up over every frame rendered so far. Hooked from
+CL_FinishTimeDemo() so a "-condebug +timedemo" capture writes this to
+id1/qconsole.log right after the standard "N frames M seconds F fps" line.
+All buckets are wall-clock seconds via the existing PIT-based Sys_FloatTime();
+no new timer primitive was added.
+=============
+*/
+void R_PrintStageProfile (void)
+{
+	double	span_gen;		// pure edge-walk/scan-conversion time, derived:
+							// R_ScanEdges() total minus the two sub-stages
+							// (surface caching, span drawing) timed inside it
+	double	accounted;
+	double	other;
+	double	total;
+
+	total = prof_frame_accum;
+	if (total <= 0)
+	{
+		Con_Printf ("R_PrintStageProfile: no frames profiled\n");
+		return;
+	}
+
+	span_gen = prof_scanedges_accum - prof_surfcache_accum - prof_spandraw_accum;
+	if (span_gen < 0)
+		span_gen = 0;
+
+	accounted = prof_edgebsp_accum + span_gen + prof_surfcache_accum +
+				prof_spandraw_accum + prof_alias_accum + prof_particles_accum;
+	other = total - accounted;
+	if (other < 0)
+		other = 0;
+
+	Con_Printf ("--- stage profile (%d frames, %.3f s total render time) ---\n",
+				prof_frame_count, total);
+	Con_Printf ("  edge/BSP traversal   %7.3f s  %5.1f%%\n",
+				prof_edgebsp_accum, 100.0 * prof_edgebsp_accum / total);
+	Con_Printf ("  span gen (scan conv) %7.3f s  %5.1f%%\n",
+				span_gen, 100.0 * span_gen / total);
+	Con_Printf ("  surface caching      %7.3f s  %5.1f%%\n",
+				prof_surfcache_accum, 100.0 * prof_surfcache_accum / total);
+	Con_Printf ("  span drawing (fill)  %7.3f s  %5.1f%%\n",
+				prof_spandraw_accum, 100.0 * prof_spandraw_accum / total);
+	Con_Printf ("  alias model draw     %7.3f s  %5.1f%%\n",
+				prof_alias_accum, 100.0 * prof_alias_accum / total);
+	Con_Printf ("  particles            %7.3f s  %5.1f%%\n",
+				prof_particles_accum, 100.0 * prof_particles_accum / total);
+	Con_Printf ("  everything else      %7.3f s  %5.1f%%\n",
+				other, 100.0 * other / total);
+	Con_Printf ("  (frame total)        %7.3f s\n", total);
+}
+
+/*
+=============
 R_PrintTimes
 =============
 */

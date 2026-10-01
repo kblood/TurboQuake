@@ -341,6 +341,8 @@ void CL_FinishTimeDemo (void)
 	Con_Printf ("  on %sQuake -%s%s noasm v%4.2f\n", SUBARCH, OLEVEL, LTOFLAGS, VERSION);
 #endif
 	Con_Printf ("  %s\n", CCVERSION);
+
+	R_PrintStageProfile ();
 }
 
 /*
