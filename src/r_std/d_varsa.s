@@ -213,5 +213,398 @@ entryvec_table:	.long	0, Entry2_8, Entry3_8, Entry4_8
 spr8entryvec_table:	.long	0, Spr8Entry2_8, Spr8Entry3_8, Spr8Entry4_8
 					.long	Spr8Entry5_8, Spr8Entry6_8, Spr8Entry7_8, Spr8Entry8_8
 
+//-------------------------------------------------------
+// FDIV optimization (docs/fdiv-opt-prototype.md):
+//   z64k_tmp(float bits) = 65536 / zi_tmp(float bits)
+// via 1024-entry Q30 reciprocal LUT + ONE Newton-Raphson step.
+// Replaces `flds fp_64k; fdiv %st(1),%st(0)` in the perspective
+// span-anchor divide of d_draw.s / d_draw16.s.
+// Validated: max rel err 2.4e-7, <= 0.00024 texel @ S=1024.
+//-------------------------------------------------------
+	.align	4
+.globl	zi_tmp, z64k_tmp
+zi_tmp:			.long	0
+z64k_tmp:		.long	0
+
+//-------------------------------------------------------
+// FDIV optimization #2 (edge/BSP hot path, r_drawa.s LTransformAndProject
+// and R_ClipEdge's u_step slope calc):
+//   rf_out(float bits) = 1.0 / rf_in(float bits)
+// via RecipFloat1 below, which reuses the SAME 1024-entry recip_lut
+// mantissa table as RecipZ64k above -- the table only encodes 1/M for
+// the mantissa M in [1,2), looked up by the top 10 fraction bits, and
+// the exponent of the result is reassembled separately by pure integer
+// add/sub on the biased exponent field. That makes the achieved relative
+// error (~2.4e-7, one Newton step) INDEPENDENT of the input's exponent/
+// magnitude, so the same table covers both new call sites even though
+// their operand ranges differ hugely from each other and from the
+// 65536/z span-divide use above:
+//   - 1/transformed[2] (view-space vertex depth): bounded below by
+//     NEAR_CLIP=0.01, realistically up to a few thousand map units.
+//   - 1/(v1-v0) (screen-space Y delta slope denominator): guaranteed
+//     nonzero and positive (see R_EmitEdge's ceilv0!=ceilv1 invariant),
+//     but can be anywhere from near the ~1e-5 ULP floor of a ~100-1000
+//     magnitude float (near-horizontal edges) up to MAXHEIGHT=1024.
+// RecipFloat1 differs from RecipZ64k only in the final exponent-bias
+// constant (+127, i.e. no x65536 scale) and in additionally preserving
+// %esi (RecipZ64k's call sites in d_draw.s don't need that, but
+// r_drawa.s's do -- see call sites for details).
+//-------------------------------------------------------
+.globl	rf_in, rf_out
+rf_in:			.long	0
+rf_out:			.long	0
+
+// recip_lut[i] = floor(2^41 / (2049 + 2i)), i=0..1023  (Q30 ~ 1/M)
+	.align	4
+recip_lut:	.long	0x3ff800ff, 0x3fe808fc, 0x3fd818f0, 0x3fc830d5, 0x3fb850a5, 0x3fa8785a, 0x3f98a7ef, 0x3f88df5d
+	.long	0x3f791e9e, 0x3f6965ae, 0x3f59b486, 0x3f4a0b20, 0x3f3a6976, 0x3f2acf83, 0x3f1b3d41, 0x3f0bb2ab
+	.long	0x3efc2fbb, 0x3eecb46a, 0x3edd40b4, 0x3ecdd493, 0x3ebe7001, 0x3eaf12fa, 0x3e9fbd76, 0x3e906f71
+	.long	0x3e8128e5, 0x3e71e9cd, 0x3e62b223, 0x3e5381e3, 0x3e445905, 0x3e353786, 0x3e261d60, 0x3e170a8c
+	.long	0x3e07ff07, 0x3df8facb, 0x3de9fdd2, 0x3ddb0818, 0x3dcc1996, 0x3dbd3248, 0x3dae5229, 0x3d9f7933
+	.long	0x3d90a761, 0x3d81dcae, 0x3d731915, 0x3d645c91, 0x3d55a71c, 0x3d46f8b3, 0x3d38514e, 0x3d29b0eb
+	.long	0x3d1b1782, 0x3d0c8511, 0x3cfdf991, 0x3cef74fd, 0x3ce0f751, 0x3cd28088, 0x3cc4109d, 0x3cb5a78b
+	.long	0x3ca7454d, 0x3c98e9de, 0x3c8a9539, 0x3c7c475a, 0x3c6e003c, 0x3c5fbfda, 0x3c51862f, 0x3c435336
+	.long	0x3c3526ec, 0x3c27014a, 0x3c18e24d, 0x3c0ac9f0, 0x3bfcb82d, 0x3beead01, 0x3be0a867, 0x3bd2aa5a
+	.long	0x3bc4b2d6, 0x3bb6c1d6, 0x3ba8d755, 0x3b9af34f, 0x3b8d15c0, 0x3b7f3ea2, 0x3b716df2, 0x3b63a3ab
+	.long	0x3b55dfc8, 0x3b482245, 0x3b3a6b1e, 0x3b2cba4e, 0x3b1f0fd1, 0x3b116ba3, 0x3b03cdbe, 0x3af63620
+	.long	0x3ae8a4c2, 0x3adb19a2, 0x3acd94ba, 0x3ac01608, 0x3ab29d85, 0x3aa52b2e, 0x3a97beff, 0x3a8a58f4
+	.long	0x3a7cf908, 0x3a6f9f37, 0x3a624b7d, 0x3a54fdd5, 0x3a47b63d, 0x3a3a74af, 0x3a2d3927, 0x3a2003a2
+	.long	0x3a12d41a, 0x3a05aa8d, 0x39f886f6, 0x39eb6951, 0x39de519a, 0x39d13fcd, 0x39c433e6, 0x39b72de1
+	.long	0x39aa2db9, 0x399d336c, 0x39903ef5, 0x39835050, 0x3976677a, 0x3969846d, 0x395ca727, 0x394fcfa4
+	.long	0x3942fde0, 0x393631d6, 0x39296b83, 0x391caae3, 0x390feff3, 0x39033aae, 0x38f68b11, 0x38e9e119
+	.long	0x38dd3cc0, 0x38d09e04, 0x38c404e0, 0x38b77152, 0x38aae355, 0x389e5ae6, 0x3891d800, 0x38855aa1
+	.long	0x3878e2c5, 0x386c7068, 0x38600386, 0x38539c1b, 0x38473a25, 0x383adda0, 0x382e8687, 0x382234d8
+	.long	0x3815e88e, 0x3809a1a7, 0x37fd601f, 0x37f123f2, 0x37e4ed1d, 0x37d8bb9c, 0x37cc8f6b, 0x37c06888
+	.long	0x37b446ef, 0x37a82a9c, 0x379c138c, 0x379001bc, 0x3783f528, 0x3777edcc, 0x376beba6, 0x375feeb2
+	.long	0x3753f6ec, 0x37480451, 0x373c16de, 0x37302e90, 0x37244b63, 0x37186d54, 0x370c945f, 0x3700c082
+	.long	0x36f4f1b9, 0x36e92800, 0x36dd6355, 0x36d1a3b5, 0x36c5e91b, 0x36ba3385, 0x36ae82ef, 0x36a2d757
+	.long	0x369730b9, 0x368b8f13, 0x367ff260, 0x36745a9d, 0x3668c7c8, 0x365d39de, 0x3651b0da, 0x36462cbb
+	.long	0x363aad7d, 0x362f331d, 0x3623bd98, 0x36184cea, 0x360ce111, 0x36017a0a, 0x35f617d1, 0x35eaba64
+	.long	0x35df61bf, 0x35d40de0, 0x35c8bec4, 0x35bd7466, 0x35b22ec6, 0x35a6eddf, 0x359bb1ae, 0x35907a31
+	.long	0x35854765, 0x357a1946, 0x356eefd2, 0x3563cb06, 0x3558aae0, 0x354d8f5b, 0x35427875, 0x3537662b
+	.long	0x352c587b, 0x35214f62, 0x35164adc, 0x350b4ae7, 0x35004f80, 0x34f558a4, 0x34ea6651, 0x34df7883
+	.long	0x34d48f38, 0x34c9aa6d, 0x34beca1f, 0x34b3ee4b, 0x34a916ef, 0x349e4408, 0x34937593, 0x3488ab8e
+	.long	0x347de5f5, 0x347324c6, 0x346867ff, 0x345daf9c, 0x3452fb9b, 0x34484bf9, 0x343da0b3, 0x3432f9c7
+	.long	0x34285733, 0x341db8f3, 0x34131f05, 0x34088966, 0x33fdf814, 0x33f36b0c, 0x33e8e24b, 0x33de5dcf
+	.long	0x33d3dd95, 0x33c9619b, 0x33bee9dd, 0x33b4765b, 0x33aa0710, 0x339f9bfa, 0x33953518, 0x338ad265
+	.long	0x338073e1, 0x33761987, 0x336bc356, 0x3361714c, 0x33572365, 0x334cd9a0, 0x334293f9, 0x3338526e
+	.long	0x332e14fd, 0x3323dba4, 0x3319a660, 0x330f752d, 0x3305480b, 0x32fb1ef7, 0x32f0f9ee, 0x32e6d8ed
+	.long	0x32dcbbf3, 0x32d2a2fd, 0x32c88e08, 0x32be7d13, 0x32b4701a, 0x32aa671c, 0x32a06216, 0x32966106
+	.long	0x328c63e9, 0x32826abd, 0x32787580, 0x326e842f, 0x326496c8, 0x325aad4a, 0x3250c7b0, 0x3246e5fa
+	.long	0x323d0824, 0x32332e2e, 0x32295813, 0x321f85d3, 0x3215b76a, 0x320becd7, 0x32022617, 0x31f86328
+	.long	0x31eea408, 0x31e4e8b5, 0x31db312c, 0x31d17d6b, 0x31c7cd71, 0x31be213a, 0x31b478c4, 0x31aad40e
+	.long	0x31a13315, 0x319795d7, 0x318dfc52, 0x31846684, 0x317ad46a, 0x31714602, 0x3167bb4b, 0x315e3442
+	.long	0x3154b0e5, 0x314b3132, 0x3141b527, 0x31383cc1, 0x312ec7ff, 0x312556de, 0x311be95d, 0x31127f79
+	.long	0x31091930, 0x30ffb680, 0x30f65767, 0x30ecfbe4, 0x30e3a3f3, 0x30da4f93, 0x30d0fec2, 0x30c7b17e
+	.long	0x30be67c5, 0x30b52194, 0x30abdeeb, 0x30a29fc6, 0x30996424, 0x30902c02, 0x3086f760, 0x307dc63a
+	.long	0x3074988f, 0x306b6e5c, 0x306247a1, 0x3059245b, 0x30500487, 0x3046e824, 0x303dcf31, 0x3034b9ab
+	.long	0x302ba78f, 0x302298dd, 0x30198d93, 0x301085ad, 0x3007812c, 0x2ffe800b, 0x2ff5824b, 0x2fec87e8
+	.long	0x2fe390e1, 0x2fda9d35, 0x2fd1ace0, 0x2fc8bfe2, 0x2fbfd638, 0x2fb6efe0, 0x2fae0cd9, 0x2fa52d21
+	.long	0x2f9c50b7, 0x2f937797, 0x2f8aa1c0, 0x2f81cf31, 0x2f78ffe8, 0x2f7033e2, 0x2f676b1f, 0x2f5ea59b
+	.long	0x2f55e356, 0x2f4d244e, 0x2f446881, 0x2f3bafec, 0x2f32fa8f, 0x2f2a4867, 0x2f219973, 0x2f18edb1
+	.long	0x2f10451f, 0x2f079fbc, 0x2efefd85, 0x2ef65e79, 0x2eedc296, 0x2ee529db, 0x2edc9445, 0x2ed401d4
+	.long	0x2ecb7284, 0x2ec2e656, 0x2eba5d46, 0x2eb1d753, 0x2ea9547b, 0x2ea0d4bd, 0x2e985818, 0x2e8fde88
+	.long	0x2e87680d, 0x2e7ef4a6, 0x2e76844f, 0x2e6e1708, 0x2e65accf, 0x2e5d45a3, 0x2e54e181, 0x2e4c8068
+	.long	0x2e442256, 0x2e3bc74a, 0x2e336f42, 0x2e2b1a3d, 0x2e22c838, 0x2e1a7933, 0x2e122d2b, 0x2e09e420
+	.long	0x2e019e0e, 0x2df95af5, 0x2df11ad4, 0x2de8dda8, 0x2de0a370, 0x2dd86c2a, 0x2dd037d5, 0x2dc80670
+	.long	0x2dbfd7f8, 0x2db7ac6c, 0x2daf83ca, 0x2da75e12, 0x2d9f3b41, 0x2d971b56, 0x2d8efe4f, 0x2d86e42b
+	.long	0x2d7ecce8, 0x2d76b884, 0x2d6ea6ff, 0x2d669857, 0x2d5e8c89, 0x2d568396, 0x2d4e7d7a, 0x2d467a35
+	.long	0x2d3e79c5, 0x2d367c28, 0x2d2e815e, 0x2d268964, 0x2d1e9439, 0x2d16a1dc, 0x2d0eb24b, 0x2d06c584
+	.long	0x2cfedb87, 0x2cf6f451, 0x2cef0fe2, 0x2ce72e37, 0x2cdf4f50, 0x2cd7732b, 0x2ccf99c6, 0x2cc7c320
+	.long	0x2cbfef38, 0x2cb81e0b, 0x2cb04f9a, 0x2ca883e1, 0x2ca0bae1, 0x2c98f496, 0x2c913101, 0x2c897020
+	.long	0x2c81b1f0, 0x2c79f671, 0x2c723da2, 0x2c6a8780, 0x2c62d40c, 0x2c5b2342, 0x2c537522, 0x2c4bc9ab
+	.long	0x2c4420da, 0x2c3c7aaf, 0x2c34d729, 0x2c2d3645, 0x2c259803, 0x2c1dfc61, 0x2c16635e, 0x2c0eccf8
+	.long	0x2c07392f, 0x2bffa800, 0x2bf8196b, 0x2bf08d6e, 0x2be90407, 0x2be17d36, 0x2bd9f8fa, 0x2bd27750
+	.long	0x2bcaf837, 0x2bc37bae, 0x2bbc01b5, 0x2bb48a49, 0x2bad1569, 0x2ba5a314, 0x2b9e3349, 0x2b96c605
+	.long	0x2b8f5b49, 0x2b87f313, 0x2b808d61, 0x2b792a33, 0x2b71c986, 0x2b6a6b5a, 0x2b630fad, 0x2b5bb67e
+	.long	0x2b545fcc, 0x2b4d0b96, 0x2b45b9d9, 0x2b3e6a96, 0x2b371dcb, 0x2b2fd376, 0x2b288b97, 0x2b21462b
+	.long	0x2b1a0332, 0x2b12c2ab, 0x2b0b8494, 0x2b0448ed, 0x2afd0fb3, 0x2af5d8e6, 0x2aeea484, 0x2ae7728c
+	.long	0x2ae042fe, 0x2ad915d7, 0x2ad1eb17, 0x2acac2bc, 0x2ac39cc6, 0x2abc7932, 0x2ab55800, 0x2aae392f
+	.long	0x2aa71cbd, 0x2aa002aa, 0x2a98eaf3, 0x2a91d598, 0x2a8ac298, 0x2a83b1f2, 0x2a7ca3a4, 0x2a7597ad
+	.long	0x2a6e8e0c, 0x2a6786bf, 0x2a6081c7, 0x2a597f21, 0x2a527ecd, 0x2a4b80c8, 0x2a448513, 0x2a3d8bac
+	.long	0x2a369492, 0x2a2f9fc3, 0x2a28ad3f, 0x2a21bd04, 0x2a1acf11, 0x2a13e366, 0x2a0cfa01, 0x2a0612e0
+	.long	0x29ff2e04, 0x29f84b6a, 0x29f16b11, 0x29ea8cf9, 0x29e3b121, 0x29dcd786, 0x29d60029, 0x29cf2b08
+	.long	0x29c85822, 0x29c18776, 0x29bab902, 0x29b3ecc7, 0x29ad22c1, 0x29a65af2, 0x299f9557, 0x2998d1ef
+	.long	0x299210b9, 0x298b51b5, 0x298494e1, 0x297dda3c, 0x297721c5, 0x29706b7b, 0x2969b75d, 0x2963056a
+	.long	0x295c55a1, 0x2955a800, 0x294efc87, 0x29485335, 0x2941ac09, 0x293b0701, 0x2934641d, 0x292dc35b
+	.long	0x292724bb, 0x2920883b, 0x2919eddb, 0x29135599, 0x290cbf75, 0x29062b6d, 0x28ff9981, 0x28f909ae
+	.long	0x28f27bf6, 0x28ebf055, 0x28e566cc, 0x28dedf59, 0x28d859fc, 0x28d1d6b3, 0x28cb557e, 0x28c4d65a
+	.long	0x28be5949, 0x28b7de47, 0x28b16555, 0x28aaee72, 0x28a4799c, 0x289e06d2, 0x28979614, 0x28912760
+	.long	0x288abab6, 0x28845015, 0x287de77b, 0x287780e8, 0x28711c5b, 0x286ab9d2, 0x2864594d, 0x285dfacb
+	.long	0x28579e4b, 0x285143cc, 0x284aeb4d, 0x284494cd, 0x283e404b, 0x2837edc6, 0x28319d3e, 0x282b4eb0
+	.long	0x2825021d, 0x281eb784, 0x28186ee3, 0x2812283a, 0x280be387, 0x2805a0ca, 0x27ff6002, 0x27f9212e
+	.long	0x27f2e44d, 0x27eca95d, 0x27e67060, 0x27e03952, 0x27da0433, 0x27d3d104, 0x27cd9fc1, 0x27c7706c
+	.long	0x27c14302, 0x27bb1783, 0x27b4edee, 0x27aec642, 0x27a8a07e, 0x27a27ca1, 0x279c5aab, 0x27963a9b
+	.long	0x27901c6f, 0x278a0027, 0x2783e5c2, 0x277dcd3f, 0x2777b69d, 0x2771a1db, 0x276b8ef9, 0x27657df5
+	.long	0x275f6ed0, 0x27596187, 0x27535619, 0x274d4c88, 0x274744d0, 0x27413ef2, 0x273b3aec, 0x273538be
+	.long	0x272f3867, 0x272939e6, 0x27233d3a, 0x271d4263, 0x2717495f, 0x2711522d, 0x270b5cce, 0x27056940
+	.long	0x26ff7781, 0x26f98792, 0x26f39972, 0x26edad20, 0x26e7c29a, 0x26e1d9e0, 0x26dbf2f2, 0x26d60dce
+	.long	0x26d02a73, 0x26ca48e2, 0x26c46918, 0x26be8b16, 0x26b8aed9, 0x26b2d463, 0x26acfbb1, 0x26a724c3
+	.long	0x26a14f99, 0x269b7c31, 0x2695aa8a, 0x268fdaa4, 0x268a0c7e, 0x26844018, 0x267e756f, 0x2678ac85
+	.long	0x2672e557, 0x266d1fe5, 0x26675c2f, 0x26619a33, 0x265bd9f0, 0x26561b67, 0x26505e96, 0x264aa37c
+	.long	0x2644ea19, 0x263f326c, 0x26397c74, 0x2633c830, 0x262e15a0, 0x262864c2, 0x2622b597, 0x261d081d
+	.long	0x26175c53, 0x2611b239, 0x260c09cf, 0x26066312, 0x2600be03, 0x25fb1aa1, 0x25f578eb, 0x25efd8e0
+	.long	0x25ea3a80, 0x25e49dc9, 0x25df02bc, 0x25d96957, 0x25d3d19a, 0x25ce3b83, 0x25c8a713, 0x25c31448
+	.long	0x25bd8321, 0x25b7f39f, 0x25b265c0, 0x25acd983, 0x25a74ee9, 0x25a1c5ef, 0x259c3e96, 0x2596b8dc
+	.long	0x259134c1, 0x258bb244, 0x25863165, 0x2580b223, 0x257b347d, 0x2575b872, 0x25703e01, 0x256ac52b
+	.long	0x25654dee, 0x255fd84a, 0x255a643d, 0x2554f1c8, 0x254f80e9, 0x254a11a0, 0x2544a3eb, 0x253f37cc
+	.long	0x2539cd40, 0x25346447, 0x252efce0, 0x2529970b, 0x252432c7, 0x251ed013, 0x25196eef, 0x25140f5a
+	.long	0x250eb153, 0x250954d9, 0x2503f9ed, 0x24fea08d, 0x24f948b8, 0x24f3f26e, 0x24ee9dae, 0x24e94a78
+	.long	0x24e3f8cb, 0x24dea8a6, 0x24d95a09, 0x24d40cf2, 0x24cec162, 0x24c97757, 0x24c42ed1, 0x24bee7d0
+	.long	0x24b9a252, 0x24b45e57, 0x24af1bdf, 0x24a9dae8, 0x24a49b72, 0x249f5d7c, 0x249a2107, 0x2494e610
+	.long	0x248fac98, 0x248a749d, 0x24853e20, 0x24800920, 0x247ad59b, 0x2475a391, 0x24707302, 0x246b43ee
+	.long	0x24661652, 0x2460ea2f, 0x245bbf85, 0x24569652, 0x24516e95, 0x244c484f, 0x2447237f, 0x24420024
+	.long	0x243cde3d, 0x2437bdca, 0x24329eca, 0x242d813c, 0x24286520, 0x24234a76, 0x241e313d, 0x24191973
+	.long	0x24140319, 0x240eee2e, 0x2409dab1, 0x2404c8a2, 0x23ffb800, 0x23faa8ca, 0x23f59b01, 0x23f08ea2
+	.long	0x23eb83ae, 0x23e67a25, 0x23e17204, 0x23dc6b4d, 0x23d765fe, 0x23d26217, 0x23cd5f96, 0x23c85e7d
+	.long	0x23c35ec9, 0x23be607a, 0x23b96391, 0x23b4680b, 0x23af6de9, 0x23aa752a, 0x23a57dce, 0x23a087d4
+	.long	0x239b933a, 0x2396a002, 0x2391ae29, 0x238cbdb0, 0x2387ce97, 0x2382e0db, 0x237df47e, 0x2379097d
+	.long	0x23741fda, 0x236f3792, 0x236a50a7, 0x23656b16, 0x236086e0, 0x235ba403, 0x2356c280, 0x2351e256
+	.long	0x234d0384, 0x23482609, 0x234349e6, 0x233e6f19, 0x233995a3, 0x2334bd81, 0x232fe6b5, 0x232b113d
+	.long	0x23263d19, 0x23216a48, 0x231c98ca, 0x2317c89e, 0x2312f9c4, 0x230e2c3a, 0x23096002, 0x23049519
+	.long	0x22ffcb80, 0x22fb0336, 0x22f63c3a, 0x22f1768c, 0x22ecb22b, 0x22e7ef17, 0x22e32d50, 0x22de6cd4
+	.long	0x22d9ada3, 0x22d4efbd, 0x22d03321, 0x22cb77cf, 0x22c6bdc6, 0x22c20506, 0x22bd4d8d, 0x22b8975c
+	.long	0x22b3e272, 0x22af2ecf, 0x22aa7c72, 0x22a5cb5a, 0x22a11b87, 0x229c6cf8, 0x2297bfad, 0x229313a6
+	.long	0x228e68e2, 0x2289bf60, 0x22851720, 0x22807021, 0x227bca63, 0x227725e6, 0x227282a8, 0x226de0a9
+	.long	0x22693fea, 0x2264a069, 0x22600226, 0x225b6520, 0x2256c956, 0x22522eca, 0x224d9579, 0x2248fd63
+	.long	0x22446688, 0x223fd0e8, 0x223b3c81, 0x2236a954, 0x22321760, 0x222d86a4, 0x2228f720, 0x222468d3
+	.long	0x221fdbbe, 0x221b4fde, 0x2216c535, 0x22123bc1, 0x220db383, 0x22092c78, 0x2204a6a2, 0x22002200
+	.long	0x21fb9e90, 0x21f71c53, 0x21f29b48, 0x21ee1b6f, 0x21e99cc7, 0x21e51f50, 0x21e0a309, 0x21dc27f1
+	.long	0x21d7ae09, 0x21d33550, 0x21cebdc5, 0x21ca4768, 0x21c5d238, 0x21c15e36, 0x21bceb60, 0x21b879b5
+	.long	0x21b40937, 0x21af99e3, 0x21ab2bba, 0x21a6bebc, 0x21a252e7, 0x219de83b, 0x21997eb8, 0x2195165d
+	.long	0x2190af2b, 0x218c491f, 0x2187e43b, 0x2183807d, 0x217f1de5, 0x217abc73, 0x21765c26, 0x2171fcfe
+	.long	0x216d9efa, 0x2169421a, 0x2164e65e, 0x21608bc4, 0x215c324d, 0x2157d9f7, 0x215382c4, 0x214f2cb1
+	.long	0x214ad7c0, 0x214683ee, 0x2142313c, 0x213ddfaa, 0x21398f37, 0x21353fe2, 0x2130f1ac, 0x212ca493
+	.long	0x21285897, 0x21240db8, 0x211fc3f6, 0x211b7b4f, 0x211733c4, 0x2112ed54, 0x210ea7ff, 0x210a63c4
+	.long	0x210620a3, 0x2101de9b, 0x20fd9dac, 0x20f95dd5, 0x20f51f17, 0x20f0e170, 0x20eca4e1, 0x20e86968
+	.long	0x20e42f06, 0x20dff5ba, 0x20dbbd83, 0x20d78661, 0x20d35055, 0x20cf1b5c, 0x20cae778, 0x20c6b4a7
+	.long	0x20c282e9, 0x20be523e, 0x20ba22a5, 0x20b5f41d, 0x20b1c6a8, 0x20ad9a43, 0x20a96eef, 0x20a544ab
+	.long	0x20a11b77, 0x209cf352, 0x2098cc3d, 0x2094a636, 0x2090813d, 0x208c5d52, 0x20883a74, 0x208418a4
+	.long	0x207ff7e0, 0x207bd828, 0x2077b97b, 0x20739bdb, 0x206f7f45, 0x206b63ba, 0x20674939, 0x20632fc2
+	.long	0x205f1754, 0x205affef, 0x2056e993, 0x2052d43f, 0x204ebff3, 0x204aacaf, 0x20469a71, 0x2042893b
+	.long	0x203e790a, 0x203a69df, 0x20365bba, 0x20324e9a, 0x202e427f, 0x202a3768, 0x20262d55, 0x20222446
+	.long	0x201e1c3a, 0x201a1531, 0x20160f2a, 0x20120a25, 0x200e0622, 0x200a0320, 0x20060120, 0x20020020
+
+	.text
+	.align	4
+// RecipZ64k: z64k_tmp = IEEE-754 bits of 65536 / (float bits in zi_tmp).
+// Pure integer; preserves every general-purpose register.
+.globl	RecipZ64k
+RecipZ64k:
+	pushl	%eax
+	pushl	%ebx
+	pushl	%ecx
+	pushl	%edx
+	pushl	%edi
+	movl	zi_tmp, %eax			// IEEE-754 bits of zi
+	movl	%eax, %ebx				// xbits
+	movl	%eax, %ecx
+	shrl	$23, %ecx
+	andl	$0x000000FF, %ecx
+	subl	$127, %ecx				// e (unbiased exponent)
+	pushl	%ecx					// save e
+	andl	$0x007FFFFF, %ebx		// 23-bit fraction
+	movl	%ebx, %edi
+	shrl	$13, %edi				// idx = top 10 fraction bits
+	movl	recip_lut(,%edi,4), %eax	// r0 (Q30 ~ 1/M)
+	movl	%ebx, %edx
+	shll	$7, %edx
+	orl		$0x40000000, %edx		// Mq (Q30, implicit 1)
+	pushl	%eax					// save r0
+	mull	%edx					// EDX:EAX = Mq*r0
+	shrdl	$30, %edx, %eax			// M*r0 in Q30
+	movl	$0x80000000, %edx		// 2.0 in Q30
+	subl	%eax, %edx				// 2 - M*r0
+	popl	%eax					// r0
+	mull	%edx					// EDX:EAX = r0*(2 - M*r0)
+	shrdl	$30, %edx, %eax			// r1 (Q30 reciprocal of mantissa)
+	popl	%ecx					// e
+	shll	$1, %eax				// 2/M in Q30
+	subl	$0x40000000, %eax		// - 2^30
+	shrl	$7, %eax				// frac23
+	movl	$-1, %edx				// k = -1 (from the *2 normalize)
+	cmpl	$0x00800000, %eax		// mantissa overflowed to 2.0?
+	jb		1f
+	xorl	%eax, %eax				// frac23 = 0
+	xorl	%edx, %edx				// k = 0 (renormalize 2.0 -> 1.0)
+1:
+	subl	%ecx, %edx				// k - e
+	addl	$143, %edx				// + 16 (65536) + 127 (bias)
+	andl	$0x000000FF, %edx
+	shll	$23, %edx
+	orl		%edx, %eax				// (exp_field<<23) | frac23
+	movl	%eax, z64k_tmp
+	popl	%edi
+	popl	%edx
+	popl	%ecx
+	popl	%ebx
+	popl	%eax
+	ret
+
+	.align	4
+// RecipFloat1: rf_out = IEEE-754 bits of 1.0 / (float bits in rf_in).
+// Same mantissa-LUT + one Newton-Raphson step as RecipZ64k, just without
+// the x65536 scale (see the comment block above recip_lut for the domain
+// argument for why this is safe to reuse across very different input
+// magnitudes). Pure integer; preserves every general-purpose register
+// including %esi (RecipZ64k does not save %esi -- its own call sites
+// happen not to need it live, but callers in r_drawa.s do, so this copy
+// is intentionally more conservative).
+// Domain: x must be a positive, normal (non-subnormal, non-zero) float.
+// Both call sites in r_drawa.s guarantee this (see analysis above).
+.globl	RecipFloat1
+RecipFloat1:
+	pushl	%eax
+	pushl	%ebx
+	pushl	%ecx
+	pushl	%edx
+	pushl	%esi
+	pushl	%edi
+	movl	rf_in, %eax				// IEEE-754 bits of x
+	movl	%eax, %ebx				// xbits
+	movl	%eax, %ecx
+	shrl	$23, %ecx
+	andl	$0x000000FF, %ecx
+	subl	$127, %ecx				// e (unbiased exponent)
+	pushl	%ecx					// save e
+	andl	$0x007FFFFF, %ebx		// 23-bit fraction
+	movl	%ebx, %edi
+	shrl	$13, %edi				// idx = top 10 fraction bits
+	movl	recip_lut(,%edi,4), %eax	// r0 (Q30 ~ 1/M)
+	movl	%ebx, %edx
+	shll	$7, %edx
+	orl		$0x40000000, %edx		// Mq (Q30, implicit 1)
+	pushl	%eax					// save r0
+	mull	%edx					// EDX:EAX = Mq*r0
+	shrdl	$30, %edx, %eax			// M*r0 in Q30
+	movl	$0x80000000, %edx		// 2.0 in Q30
+	subl	%eax, %edx				// 2 - M*r0
+	popl	%eax					// r0
+	mull	%edx					// EDX:EAX = r0*(2 - M*r0)
+	shrdl	$30, %edx, %eax			// r1 (Q30 reciprocal of mantissa)
+	popl	%ecx					// e
+	shll	$1, %eax				// 2/M in Q30
+	subl	$0x40000000, %eax		// - 2^30
+	shrl	$7, %eax				// frac23
+	movl	$-1, %edx				// k = -1 (from the *2 normalize)
+	cmpl	$0x00800000, %eax		// mantissa overflowed to 2.0?
+	jb		1f
+	xorl	%eax, %eax				// frac23 = 0
+	xorl	%edx, %edx				// k = 0 (renormalize 2.0 -> 1.0)
+1:
+	subl	%ecx, %edx				// k - e
+	addl	$127, %edx				// + 127 (bias only -- no x65536 here)
+	andl	$0x000000FF, %edx
+	shll	$23, %edx
+	orl		%edx, %eax				// (exp_field<<23) | frac23
+	movl	%eax, rf_out
+	popl	%edi
+	popl	%esi
+	popl	%edx
+	popl	%ecx
+	popl	%ebx
+	popl	%eax
+	ret
+
+//-------------------------------------------------------
+// Generic single-precision reciprocal (1/x), for the alias-model FDIV
+// optimization (docs/fdiv-opt-prototype.md follow-up): eliminates the
+// per-vertex 1/z in r_aliasa.s:R_AliasTransformAndProjectFinalVerts and
+// the per-triangle 1/d_xdenom in d_polysa.s:D_DrawNonSubdiv.
+//
+// This reuses the EXACT same mantissa LUT + one Newton-Raphson step as
+// RecipZ64k above -- the LUT indexes only the top 10 bits of the 23-bit
+// mantissa, which is always normalized to [1,2) for any nonzero finite
+// float, and the result's exponent is recovered afterwards by exact
+// integer arithmetic (k - e + bias). That makes the whole technique
+// domain-independent: the ~2.4e-7 max relative error RecipZ64k was
+// validated with (docs/fdiv-opt-prototype.md) applies uniformly no
+// matter what exponent (magnitude) the input has, so it covers both
+// call sites' very different numeric ranges (z's few-thousand-unit
+// range vs. d_xdenom's up-to-~10^7 cross-product range) without any
+// LUT changes. The only differences from RecipZ64k: (1) no 65536
+// numerator scale (bias offset is +127, not +143 = 16+127), and (2)
+// explicit sign handling, because RecipZ64k's caller only ever sees
+// positive z (so it never bothered), while d_xdenom here is always
+// STRICTLY NEGATIVE by construction (D_DrawNonSubdiv only reaches this
+// code when d_xdenom < 0; the caller's `jns LNextTri` already skipped
+// the >=0 case), so the reciprocal's sign must be threaded through.
+//
+// (Merge note: this routine and RecipFloat1 above were added
+// independently by two separate optimization tracks -- edge/BSP added
+// RecipFloat1, alias-model added Recip -- both on top of the same
+// RecipZ64k+recip_lut base. They coexist here unmodified: distinct
+// globals (rf_in/rf_out vs recip_in/recip_out), distinct entry points
+// (RecipFloat1 vs Recip), no symbol collisions. Both reuse recip_lut
+// verbatim; no second table needed.)
+//-------------------------------------------------------
+	.data
+	.align	4
+.globl	recip_in, recip_out
+recip_in:		.long	0
+recip_out:		.long	0
+
+	.text
+	.align	4
+// Recip: recip_out = IEEE-754 bits of 1.0 / (float bits in recip_in).
+// Pure integer; preserves every general-purpose register; touches no
+// FPU state at all (safe to call with any x87 stack depth/contents,
+// same calling convention as RecipZ64k above).
+.globl Recip
+Recip:
+	pushl	%eax
+	pushl	%ebx
+	pushl	%ecx
+	pushl	%edx
+	pushl	%edi
+	movl	recip_in, %eax			// IEEE-754 bits of x
+	movl	%eax, %ebx				// xbits
+	andl	$0x80000000, %eax		// isolate sign bit
+	pushl	%eax					// save sign
+	movl	%ebx, %ecx
+	shrl	$23, %ecx
+	andl	$0x000000FF, %ecx
+	subl	$127, %ecx				// e (unbiased exponent)
+	pushl	%ecx					// save e
+	andl	$0x007FFFFF, %ebx		// 23-bit fraction
+	movl	%ebx, %edi
+	shrl	$13, %edi				// idx = top 10 fraction bits
+	movl	recip_lut(,%edi,4), %eax	// r0 (Q30 ~ 1/M)
+	movl	%ebx, %edx
+	shll	$7, %edx
+	orl		$0x40000000, %edx		// Mq (Q30, implicit 1)
+	pushl	%eax					// save r0
+	mull	%edx					// EDX:EAX = Mq*r0
+	shrdl	$30, %edx, %eax			// M*r0 in Q30
+	movl	$0x80000000, %edx		// 2.0 in Q30
+	subl	%eax, %edx				// 2 - M*r0
+	popl	%eax					// r0
+	mull	%edx					// EDX:EAX = r0*(2 - M*r0)
+	shrdl	$30, %edx, %eax			// r1 (Q30 reciprocal of mantissa)
+	popl	%ecx					// e
+	shll	$1, %eax				// 2/M in Q30
+	subl	$0x40000000, %eax		// - 2^30
+	shrl	$7, %eax				// frac23
+	movl	$-1, %edx				// k = -1 (from the *2 normalize)
+	cmpl	$0x00800000, %eax		// mantissa overflowed to 2.0?
+	jb		1f
+	xorl	%eax, %eax				// frac23 = 0
+	xorl	%edx, %edx				// k = 0 (renormalize 2.0 -> 1.0)
+1:
+	subl	%ecx, %edx				// k - e
+	addl	$127, %edx				// + 127 (bias only; K=1 here, vs. RecipZ64k's K=65536)
+	andl	$0x000000FF, %edx
+	shll	$23, %edx
+	orl		%edx, %eax				// (exp_field<<23) | frac23
+	popl	%edx					// sign
+	orl		%edx, %eax				// restore sign
+	movl	%eax, recip_out
+	popl	%edi
+	popl	%edx
+	popl	%ecx
+	popl	%ebx
+	popl	%eax
+	ret
+
 #endif	// id386
 

@@ -33,6 +33,30 @@ this will build the standard TurboQuake binary by default.
 
 to build all binaries, you can run the `build_all.sh` script.
 
+reproducible DOS release build
+==============================
+
+`build_clean_release.ps1` snapshots only the tracked `Makefile.dos`, `common.mk`,
+and `src/**` inputs into a unique scratch directory outside this checkout. It
+then uses the Ubuntu WSL DJGPP cross-compiler in `/opt/djgpp/bin` to build the
+486 and 586 DOS executables twice. A fixed `SOURCE_DATE_EPOCH` removes the
+otherwise changing `__DATE__`/`__TIME__` banner, and the helper rejects either
+CPU build unless both copies are byte-identical.
+
+Native stderr is captured for diagnostics but does not itself fail the build;
+the DJGPP/make exit code is authoritative. This permits ordinary compiler
+warnings without masking genuine nonzero exits under Windows PowerShell 5.1.
+
+From PowerShell, run:
+
+    .\build_clean_release.ps1 -DosRoot C:\LLM\DOS -KeepScratch -VerifyReproducible
+
+The returned `BinPath` contains `QUAKE.EXE` (the 486 default), `486qO3l.exe`,
+`586qO3l.exe`, and `TQBLD.TXT`. The provenance file records the exact source,
+orchestrator, WSL toolchain, configuration, and output SHA-256 values. The
+parent `C:\LLM\DOS\BuildReleasesVHD.ps1 -Build` command invokes this gate and
+removes its validated scratch directory only after the release image succeeds.
+
 advanced build options
 ======================
 

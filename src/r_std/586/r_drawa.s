@@ -295,7 +295,18 @@ LSide1:
 //		u_step = ((u0 - r_u1) / (v0 - r_v1));
 	fsubrp	%st(0),%st(3)		// v0 | v1 | u0-u1
 	fsub	%st(1),%st(0)		// v0-v1 | v1 | u0-u1
-	fdivrp	%st(0),%st(2)		// v1 | ustep
+// FDIV-opt: ustep = (u0-u1) * (1.0/(v0-v1)) via RecipFloat1 instead of
+// fdivrp. (v0-v1) is guaranteed nonzero (ceilv0!=r_ceilv1, non-horizontal
+// edge) but can range from near the ULP floor of a ~100-1000 magnitude
+// float up to MAXHEIGHT -- see the domain-analysis comment above
+// recip_lut in d_varsa.s for why the same mantissa-LUT covers this.
+// All GP registers are live across this point in the caller (ebx/ecx/
+// edx/edi at minimum) and RecipFloat1 preserves all of them.
+	fstps	rf_in				// v1 | u0-u1     (denom popped to memory)
+	call	RecipFloat1
+	fxch	%st(1)				// u0-u1 | v1
+	fmuls	rf_out				// ustep | v1
+	fxch	%st(1)				// v1 | ustep
 
 //	r_emitted = 1;
 	movl	$1,C(r_emitted)
@@ -345,7 +356,13 @@ LSide0:
 	fsub	%st(3),%st(0)		// u1-u0 | v0 | v1 | u0
 	fxch	%st(2)				// v1 | v0 | u1-u0 | u0
 	fsub	%st(1),%st(0)		// v1-v0 | v0 | u1-u0 | u0
-	fdivrp	%st(0),%st(2)		// v0 | ustep | u0
+// FDIV-opt: ustep = (u1-u0) * (1.0/(v1-v0)) via RecipFloat1 instead of
+// fdivrp -- same reasoning/domain analysis as the LSide1 site above.
+	fstps	rf_in				// v0 | u1-u0 | u0   (denom popped to mem)
+	call	RecipFloat1
+	fxch	%st(1)				// u1-u0 | v0 | u0
+	fmuls	rf_out				// ustep | v0 | u0
+	fxch	%st(1)				// v0 | ustep | u0
 
 //	r_emitted = 1;
 	movl	$1,C(r_emitted)
@@ -773,7 +790,14 @@ LTransformAndProject:
 
 LNoClip:
 
-	fdivrs	float_1				// lzi0 | x | y
+// FDIV-opt: lzi0 = 1.0 / transformed[2] via mantissa-LUT + one Newton
+// step (RecipFloat1, src/r_std/d_varsa.s) instead of a hardware FDIV.
+// Preserves every GP register (same contract the plain fdivrs had), so
+// nothing else in this routine or its caller (R_ClipEdge) needs to
+// change. See the domain-analysis comment above recip_lut in d_varsa.s.
+	fstps	rf_in				// x | y            (z popped to memory)
+	call	RecipFloat1			// x | y            (all GPRs preserved)
+	flds	rf_out				// lzi0 | x | y
 	fxch	%st(1)				// x | lzi0 | y
 
 //	// FIXME: build x/yscale into transform?

@@ -34,11 +34,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <dpmi.h>
 #include <sys/nearptr.h>
 #include <conio.h>
+#include <math.h>
 
 #include "../quakedef.h"
-#include "../dosisms.h"
+#include "../dos/dosisms.h"
 
-#include "../r_shared.h"
+#include "../r_std/r_shared.h"
 
 #include "qmark.h"
 
@@ -1274,6 +1275,153 @@ int Qm_Test_DrawParticle( void ) {
 	return score;
 }
 
+/* ======================================================================
+   Span-divide microbenchmark.
+
+   Quake's software renderer re-establishes perspective truth at each 8/16-px
+   span anchor with ONE divide:  z64k = 65536.0 / zi  (fp_64k / interpolated
+   1/z), emitted as a single x87 FDIV.  On the real AO486 core the FPU is
+   fully serial and FDIV is a ~163-cycle hard stall, so this divide is the
+   dominant per-frame lever (tens of thousands of anchors/frame).
+
+   The FDIV optimization (docs/fdiv-opt-prototype.md, proto/recip.asm)
+   replaces it with a pure-integer reciprocal: a 1024-entry Q30 seed LUT
+   indexed by the top 10 mantissa bits + ONE Newton-Raphson step
+   (r1 = r0*(2 - M*r0)), reassembled directly into the IEEE-754 bits of
+   65536/z so the surrounding fmul/fistp texel chain is untouched.
+
+   The two timed tests below run BOTH forms over the SAME log-uniform z
+   stream (z in the Quake frustum [4,4096]); the ratio of their scores is
+   the real FDIV-vs-LUT speedup.
+
+   NOTE: this ratio is only meaningful on the AO486 hardware.  DOSBox (and
+   most emulators) implement FDIV with no latency, so there the FDIV form
+   will look as fast or faster than the LUT path -- the test exists for the
+   rig, not for the emulator.
+   ====================================================================== */
+
+#define QM_SD_LBITS   10
+#define QM_SD_LSIZE   (1<<QM_SD_LBITS)     /* 1024-entry reciprocal seed LUT */
+#define QM_SD_NZ      1024                 /* z input-stream length (pow2)   */
+
+static unsigned int   qm_recip_lut[QM_SD_LSIZE];
+static float          qm_zstream[QM_SD_NZ];
+static int            qm_sd_ready = 0;
+static volatile float qm_sd_sink;          /* keeps the divide result live  */
+
+static unsigned int qm_f2u(float f){ unsigned int u; memcpy(&u,&f,4); return u; }
+static float        qm_u2f(unsigned int u){ float f; memcpy(&f,&u,4); return f; }
+
+/*
+ * Integer reciprocal: returns the IEEE-754 bit pattern of 65536/x for a
+ * positive float x.  Exactly the sequence proto/recip.asm:recip_core runs in
+ * place of the FDIV.  x = M*2^e, M=1.f in [1,2); 1/M ~= LUT seed (Q30) refined
+ * by one Newton step; 65536/x reassembled directly as float bits.
+ */
+static unsigned int qm_recip_64k_floatbits(unsigned int xbits)
+{
+	unsigned int        frac = xbits & 0x7FFFFFu;        /* 23-bit fraction      */
+	int                 e    = (int)((xbits>>23)&0xFF) - 127;
+	unsigned int        idx  = frac >> (23-QM_SD_LBITS); /* top 10 bits          */
+	unsigned int        r0   = qm_recip_lut[idx];        /* Q30 ~ 1/M            */
+	unsigned int        Mq   = (1u<<30) | (frac << (30-23));
+	unsigned long long  t    = ((unsigned long long)Mq * (unsigned long long)r0) >> 30;
+	unsigned int        two_minus = (unsigned int)((1u<<31) - t);
+	unsigned int        r1   = (unsigned int)(((unsigned long long)r0 * (unsigned long long)two_minus) >> 30);
+	unsigned int        mq   = r1 << 1;                  /* 2/M in Q30           */
+	int                 k    = -1;
+	unsigned int        frac23 = (mq - (1u<<30)) >> 7;   /* mantissa fraction    */
+	int                 exp_unb;
+	unsigned int        exp_field;
+
+	if (frac23 >= (1u<<23)) { frac23 = 0; k = 0; }       /* m==2.0 -> renorm     */
+	exp_unb   = k - e + 16;                              /* -e + 16 (the 65536)  */
+	exp_field = (unsigned int)(exp_unb + 127) & 0xFF;
+	return (exp_field << 23) | (frac23 & 0x7FFFFFu);
+}
+
+static void Qm_SpanDivide_Setup(void)
+{
+	int i;
+
+	if (qm_sd_ready)
+		return;
+
+	/* 1024-entry Q30 reciprocal seed: lut[i] = round((1/M)*2^30),
+	   M = 1 + (i+0.5)/1024  ==  2^41 / (2049 + 2i).  Pure integer. */
+	for (i = 0; i < QM_SD_LSIZE; i++) {
+		unsigned long long num = 0x20000000000ULL;       /* 2^41 */
+		unsigned int       den = (unsigned int)(2049 + 2*i);
+		qm_recip_lut[i] = (unsigned int)(num / den);
+	}
+
+	/* z input stream, log-uniform across the Quake frustum z in [4,4096].
+	   Same stream feeds both the FDIV and the reciprocal-LUT tests. */
+	for (i = 0; i < QM_SD_NZ; i++) {
+		double frac = (double)i / (double)(QM_SD_NZ-1);
+		double z    = 4.0 * pow(4096.0/4.0, frac);
+		qm_zstream[i] = (float)z;
+	}
+
+	qm_sd_ready = 1;
+}
+
+/* Classic per-span FDIV form: z64k = 65536/z (one x87 FDIV per anchor). */
+int Qm_SpanDivide_Fdiv( void ) {
+	float oldtime, newtime, targettime, totaltime;
+	int score, i, k, iters;
+	float acc = 0;
+
+	Qm_SpanDivide_Setup();
+
+	printf( "Qm_SpanDivide_Fdiv (65536/z):  " );
+	oldtime = newtime = Sys_FloatTime ();
+	targettime = oldtime + test_length;
+	iters = 0;
+
+	for ( i = 0; newtime < targettime; i++ ) {
+		for ( k = 0; k < 1000000; k++ )
+			acc += 65536.0f / qm_zstream[k & (QM_SD_NZ-1)];
+		newtime = Sys_FloatTime();
+		iters += k;
+	}
+
+	qm_sd_sink = acc;
+	totaltime = newtime - oldtime;
+	score = (int)( ((float)iters / totaltime) / 1000.f );
+	printf( "%i (%ik iters in %1.1f secs)\n", score, iters/1000, totaltime );
+
+	return score;
+}
+
+/* Reciprocal-LUT form: 1024-entry Q30 seed + 1 Newton step, integer only. */
+int Qm_SpanDivide_Recip( void ) {
+	float oldtime, newtime, targettime, totaltime;
+	int score, i, k, iters;
+	float acc = 0;
+
+	Qm_SpanDivide_Setup();
+
+	printf( "Qm_SpanDivide_Recip (LUT+NR):  " );
+	oldtime = newtime = Sys_FloatTime ();
+	targettime = oldtime + test_length;
+	iters = 0;
+
+	for ( i = 0; newtime < targettime; i++ ) {
+		for ( k = 0; k < 1000000; k++ )
+			acc += qm_u2f( qm_recip_64k_floatbits( qm_f2u( qm_zstream[k & (QM_SD_NZ-1)] ) ) );
+		newtime = Sys_FloatTime();
+		iters += k;
+	}
+
+	qm_sd_sink = acc;
+	totaltime = newtime - oldtime;
+	score = (int)( ((float)iters / totaltime) / 1000.f );
+	printf( "%i (%ik iters in %1.1f secs)\n", score, iters/1000, totaltime );
+
+	return score;
+}
+
 unsigned char pal[768];
 
 void emuprint(void) {
@@ -1400,6 +1548,27 @@ int main (int c, char **v)
 	Qm_Test_FmulReal();
 	Qm_Test_FmulEmul();
 	Qm_Test_FmulEmulCyrix();
+
+	// ////////////////////////////////////////////// //
+	// span-divide test: per-span FDIV vs reciprocal-LUT //
+	// ////////////////////////////////////////////// //
+	printf( "\n## Span-divide test (per-span perspective 65536/z)\n" );
+
+	int SpanFdivScore, SpanRecipScore;
+
+	SpanFdivScore  = Qm_SpanDivide_Fdiv();
+	SpanRecipScore = Qm_SpanDivide_Recip();
+
+	if ( SpanFdivScore == SpanRecipScore ) {
+		emuprint();
+	}
+
+	if ( SpanFdivScore > 0 ) {
+		printf( "    span-divide speedup (recip / fdiv): %1.2fx\n",
+				(float)SpanRecipScore / (float)SpanFdivScore );
+	}
+	printf( "    (meaningful ONLY on the real AO486 core, where FDIV stalls ~163 cyc;\n" );
+	printf( "     DOSBox FDIV has no latency, so its ratio is not representative.)\n" );
 }
 
 

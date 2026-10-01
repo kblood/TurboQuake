@@ -95,7 +95,21 @@ Lloop:
 //	// lighting
 //		plightnormal = r_avertexnormals[pverts->lightnormalindex];
 
-	fdivrs	Lfloat_1			// zi | v[2] | v[1] | v[0]
+// FDIV->reciprocal-LUT optimization (docs/fdiv-opt-prototype.md follow-up):
+// z (top of stack here) is guaranteed > ALIAS_Z_CLIP_PLANE (=5), i.e. a
+// normal positive float, by the z-clip pass in r_alias.c that runs before
+// this is ever called. Recip (src/r_std/d_varsa.s) computes 1/z via the
+// same mantissa-LUT+Newton technique already validated for the perspective
+// span divide (~2.4e-7 max relative error, domain-independent -- see
+// d_varsa.s). It's pure integer and touches no FPU state, so it's a safe
+// drop-in for the exposed-latency hardware FDIV that used to sit here:
+// snapshot z (fsts, stack unchanged), call it, then pop the old z and
+// push the new zi so the FPU stack ends up exactly as the old fdivrs
+// left it.
+	fsts	recip_in			// z | v[2] | v[1] | v[0]  (stack unchanged)
+	call	Recip
+	fstp	%st(0)				// v[2] | v[1] | v[0]  (discard old z)
+	flds	recip_out			// zi | v[2] | v[1] | v[0]
 
 //		fv->v[2] = pstverts->s;
 //		fv->v[3] = pstverts->t;

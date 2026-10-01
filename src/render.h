@@ -67,6 +67,15 @@ typedef struct entity_s
 	struct mnode_s			*topnode;		// for bmodels, first world node
 											//  that splits bmodel, or NULL if
 											//  not split
+
+// cached result of R_RotateBmodel() for this entity: as long as
+// bmodel_rotation_angles still matches the current angles, entity_rotation
+// can be memcpy'd from bmodel_rotation_matrix instead of being rebuilt with
+// 3x sin() + 3x cos() -- a pure memoization of a deterministic computation,
+// so it is bit-identical to always recomputing (see R_RotateBmodel).
+	qboolean				bmodel_rotation_cached;
+	vec3_t					bmodel_rotation_angles;
+	float					bmodel_rotation_matrix[3][3];
 } entity_t;
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!

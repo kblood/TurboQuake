@@ -647,7 +647,7 @@ void Mod_LoadTexinfo (lump_t *l)
 {
 	texinfo_t *in;
 	mtexinfo_t *out;
-	int 	i, j, count;
+	int 	i, j, k, count;
 	int		miptex;
 	float	len1, len2;
 
@@ -662,8 +662,12 @@ void Mod_LoadTexinfo (lump_t *l)
 
 	for ( i=0 ; i<count ; i++, in++, out++)
 	{
-		for (j=0 ; j<8 ; j++)
-			out->vecs[0][j] = LittleFloat (in->vecs[0][j]);
+		// Address both 2x4 arrays within their declared bounds.  The original
+		// vecs[0][0..7] idiom relied on adjacent subarrays and is undefined C;
+		// modern GCC can optimize it incorrectly under -O3/LTO.
+		for (j=0 ; j<2 ; j++)
+			for (k=0 ; k<4 ; k++)
+				out->vecs[j][k] = LittleFloat (in->vecs[j][k]);
 		len1 = Length (out->vecs[0]);
 		len2 = Length (out->vecs[1]);
 		len1 = (len1 + len2)/2;
