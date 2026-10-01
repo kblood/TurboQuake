@@ -151,9 +151,10 @@ LSpanLoop:
 	faddp	%st(0),%st(1)		// du*d_zistepu + dv*d_zistepv | t/z | s/z             	:: 8-20	: 7
 	fadds	C(d_ziorigin)		// 1/z | t/z | s/z                                      :: 8-20	: 7
 
-	flds	fp_64k				// fp_64k | 1/z | t/z | s/z								:: 3
+	fsts	zi_tmp				// fp_64k | 1/z | t/z | s/z								:: 3
 // calculate and clamp s & t
-	fdiv	%st(1),%st(0)		// z*64k | 1/z | t/z | s/z								:: 73 	: 70
+	call	RecipZ64k
+	flds	z64k_tmp		// z*64k | 1/z | t/z | s/z								:: 73 	: 70
 	/*
 	//	... what the fuck?!?!?!
 	fsts	ftmp				// 1/z | t/z | s/z
@@ -206,8 +207,9 @@ LSpanLoop:
 	faddp	%st(0),%st(3)		// 1/z adj | t/z adj | s/z adj							:: 8-20
 								//														:: TOTAL 79-118
 								
-	flds	fp_64k				// 64k | 1/z adj | t/z adj | s/z adj
-	fdiv	%st(1),%st(0)	// this is what we've gone to all this trouble to
+	fsts	zi_tmp				// 64k | 1/z adj | t/z adj | s/z adj
+	call	RecipZ64k
+	flds	z64k_tmp	// this is what we've gone to all this trouble to
 							//  overlap
 
 	/*
@@ -235,8 +237,9 @@ LSetupNotLast1:
 	faddp	%st(0),%st(3)			// 1/z adj | t/z | s/z adj
 	flds	tdivz16stepu	// tdivz | 1/z adj | t/z | s/z adj
 	faddp	%st(0),%st(2)	// 1/z adj | t/z adj | s/z adj
-	flds	fp_64k			// fp_64k | 1/z adj | t/z adj | s/z adj
-	fdiv	%st(1),%st(0)	// z = 1/1/z
+	fsts	zi_tmp			// fp_64k | 1/z adj | t/z adj | s/z adj
+	call	RecipZ64k
+	flds	z64k_tmp	// z = 1/1/z
 							// this is what we've gone to all this trouble to
 							//  overlap
 	/*
@@ -450,8 +453,9 @@ LSetUp1:
 								//														:: TOTAL 79-118
 
 
-	flds	fp_64k				// 64k | 1/z adj | t/z adj | s/z adj
-	fdiv	%st(1),%st(0)	// this is what we've gone to all this trouble to
+	fsts	zi_tmp				// 64k | 1/z adj | t/z adj | s/z adj
+	call	RecipZ64k
+	flds	z64k_tmp	// this is what we've gone to all this trouble to
 							//  overlap
 
 	/*
@@ -473,8 +477,9 @@ LSetupNotLast2:
 	faddp	%st(0),%st(3)			// 1/z adj | t/z | s/z adj
 	flds	tdivz16stepu	// tdivz | 1/z adj | t/z | s/z adj
 	faddp	%st(0),%st(2)	// 1/z adj | t/z adj | s/z adj
-	flds	fp_64k			// fp_64k | 1/z adj | t/z adj | s/z adj
-	fdiv	%st(1),%st(0)	// z = 1/1/z
+	fsts	zi_tmp			// fp_64k | 1/z adj | t/z adj | s/z adj
+	call	RecipZ64k
+	flds	z64k_tmp	// z = 1/1/z
 							// this is what we've gone to all this trouble to
 							//  overlap
 
